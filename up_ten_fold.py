@@ -204,20 +204,34 @@ def train(model, train_loader, optimizer, lossfunction1, lossfunction2, device):
 
     for i, data in enumerate(train_loader, 0):
         batch_drug, batch_side, batch_ratings = data
-        batch_labels = batch_ratings.clone().float()
-        for k in range(batch_ratings.data.size()[0]):
-            if batch_ratings.data[k] > 0:
-                batch_labels.data[k] = 1
+        # simplify for memory usage
+        batch_labels = (batch_ratings > 0).int()
+        # batch_labels = batch_ratings.clone().float()
+        # for k in range(batch_ratings.data.size()[0]):
+        #    if batch_ratings.data[k] > 0:
+        #        batch_labels.data[k] = 1
         optimizer.zero_grad()
 
         one_label_index = np.nonzero(batch_labels.data.numpy())
         logits, reconstruction = model(batch_drug, batch_side, device)
         loss1 = lossfunction1(logits, batch_labels.to(device))
         loss2 = lossfunction2(reconstruction[one_label_index], batch_ratings[one_label_index].to(device))
-        total_loss = loss1 * loss2
-        total_loss.backward(retain_graph = True)
-        optimizer.step()
-        avg_loss += total_loss.item()
+
+        total_loss = 0.
+        if torch.count_nonzero(torch.isnan(loss1)):
+            total_loss += loss1
+        if torch.count_nonzero(torch.isnan(loss2)):
+            total_loss += loss2
+
+        if torch.is_tensor(total_loss):
+            total_loss.backward()
+            optimizer.step()
+            avg_loss += total_loss.item()
+        
+        # total_loss = loss1 * loss2
+        # total_loss.backward(retain_graph = True)
+        # optimizer.step()
+        # avg_loss += total_loss.item()
 
     return 0
 
@@ -230,20 +244,21 @@ def test(model, test_loader, neg_loader, device):
     ground_u = []
     ground_i = []
 
-    for test_drug, test_side, test_ratings in test_loader:
-
-        test_labels = test_ratings.clone().long()
-        for k in range(test_ratings.data.size()[0]):
-            if test_ratings.data[k] > 0:
-                test_labels.data[k] = 1
-        ground_i.append(list(test_drug.data.cpu().numpy()))
-        ground_u.append(list(test_side.data.cpu().numpy()))
-        test_u, test_i, test_ratings = test_drug.to(device), test_side.to(device), test_ratings.to(device)
-        scores_one, scores_two = model(test_drug, test_side, device)
-        pred1.append(list(scores_one.data.cpu().numpy()))
-        pred2.append(list(scores_two.data.cpu().numpy()))
-        ground_truth.append(list(test_ratings.data.cpu().numpy()))
-        label_truth.append(list(test_labels.data.cpu().numpy()))
+    with torch.no_grad():
+        for test_drug, test_side, test_ratings in test_loader:
+    
+            test_labels = test_ratings.clone().long()
+            for k in range(test_ratings.data.size()[0]):
+                if test_ratings.data[k] > 0:
+                    test_labels.data[k] = 1
+            ground_i.append(list(test_drug.data.cpu().numpy()))
+            ground_u.append(list(test_side.data.cpu().numpy()))
+            test_u, test_i, test_ratings = test_drug.to(device), test_side.to(device), test_ratings.to(device)
+            scores_one, scores_two = model(test_drug, test_side, device)
+            pred1.append(list(scores_one.data.cpu().numpy()))
+            pred2.append(list(scores_two.data.cpu().numpy()))
+            ground_truth.append(list(test_ratings.data.cpu().numpy()))
+            label_truth.append(list(test_labels.data.cpu().numpy()))
 
     pred1 = np.array(sum(pred1, []), dtype = np.float32)
     pred2 = np.array(sum(pred2, []), dtype=np.float32)
@@ -339,8 +354,14 @@ def Extract_positive_negative_samples(DAL, addition_negative_number='all'):
         b = random.sample(a, (interaction_target.shape[0] - number_positive))
     else:
         b = random.sample(a, (1 + addition_negative_number) * number_positive)
-    final_negtive_sample = negative_sample[b[0:number_positive], :]
-    addition_negative_sample = negative_sample[b[number_positive::], :]
+
+    # using all negative data
+    final_negative_sample = negative_sample[b, :]
+    addition_negative_sample = np.array([])
+    
+    # final_negtive_sample = negative_sample[b[0:number_positive], :]
+    # addition_negative_sample = negative_sample[b[number_positive::], :]
+    
     return addition_negative_sample, final_positive_sample, final_negtive_sample
 
 def main():
@@ -364,7 +385,7 @@ def main():
                         metavar = 'N', help = 'input batch size for testing')
     parser.add_argument('--dataset', type = str, default = 'hh',
                         metavar = 'STRING', help = 'dataset')
-    parser.add_argument('--rawpath', type=str, default='/datapath',
+    parser.add_argument('--rawpath', type=str, default='data',
                         metavar='STRING', help='rawpath')
     args = parser.parse_args()
 
